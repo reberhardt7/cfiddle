@@ -124,11 +124,21 @@ export default class Container {
     private saveCodeFiles = (code: string, includeFileData: Buffer | null): void => {
         // Create data directory and save code from request
         console.log(`${this.logPrefix}Saving code to ${this.codeHostPath}`);
-        if (!fs.existsSync(this.dataHostPath)) fs.mkdirSync(this.dataHostPath);
-        fs.writeFileSync(this.codeHostPath, code);
+        fs.access(this.dataHostPath, fs.constants.F_OK, (errPathExists) => {
+            if (errPathExists) {
+                fs.mkdir(this.dataHostPath, (err) => { if (err) throw err; });
+            }
+        });
+        fs.writeFile(this.codeHostPath, code, (err) => {
+            if (err) throw err;
+            console.log(`${this.logPrefix}Saved file to ${this.codeHostPath}`);
+        });
         if (includeFileData) {
             console.log(`${this.logPrefix}Writing include file to ${this.includeFileHostPath}`);
-            fs.writeFileSync(this.includeFileHostPath, includeFileData);
+            fs.writeFile(this.includeFileHostPath, includeFileData, (err) => {
+                if (err) throw err;
+                console.log(`${this.logPrefix}Saved file to ${this.includeFileHostPath}`);
+            });
         }
     };
 
@@ -315,8 +325,12 @@ export default class Container {
         // Remove uploaded file. We don't care about errors, in case the file
         // was already removed (or was never successfully created to begin
         // with)
-        try { fs.unlinkSync(this.codeHostPath); } catch { /* ignore */ }
-        try { fs.unlinkSync(this.includeFileHostPath); } catch { /* ignore */ }
+        fs.unlink(this.codeHostPath, () => {
+            console.log(`${this.logPrefix}Deleted ${this.codeHostPath}`);
+        });
+        fs.unlink(this.includeFileHostPath, () => {
+            console.log(`${this.logPrefix}Deleted ${this.includeFileHostPath}`);
+        });
         // Shut down gdb server, if it's running
         if (this.gdbMiServer) {
             this.gdbMiServer.close();
@@ -482,27 +496,25 @@ export default class Container {
             // have started yet, and there's not much we can do
             if (!this.containerId) return;
 
-            let cpuUsageNs;
-            try {
-                // TODO: get rid of synchronous read
-                cpuUsageNs = parseInt(
-                    fs.readFileSync(
-                        `/sys/fs/cgroup/cpu/docker/${this.containerId}/cpuacct.usage`,
-                    ).toString(),
-                    10,
-                );
-            } catch (exc) {
-                console.warn(`${this.logPrefix}Error loading cgroup CPU usage!`, exc);
-                return;
-            }
-            const cpuUsageMs = cpuUsageNs / 1000000;
-            console.debug(`${this.logPrefix}Current CPU time used: ${cpuUsageMs}ms`);
-            if (cpuUsageMs > MAX_CPU_TIME) {
-                console.warn(`${this.logPrefix}Container ${this.containerName} exceeded its CPU `
-                    + 'quota! Killing container');
-                childProcess.execFile('docker', ['kill', this.containerName]);
-                this.showErrorBanner('The program exceeded its CPU quota.');
-            }
+            fs.readFile(
+                `/sys/fs/cgroup/cpu/docker/${this.containerId}/cpuacct.usage`,
+                (err, data) => {
+                    if (err) {
+                        console.warn(`${this.logPrefix}Error loading cgroup CPU usage!`, err);
+                        return;
+                    }
+
+                    const cpuUsageNs = parseInt(data.toString(), 10);
+                    const cpuUsageMs = cpuUsageNs / 1000000;
+                    console.debug(`${this.logPrefix}Current CPU time used: ${cpuUsageMs}ms`);
+                    if (cpuUsageMs > MAX_CPU_TIME) {
+                        console.warn(`${this.logPrefix}Container ${this.containerName} exceeded its CPU `
+                            + 'quota! Killing container');
+                        childProcess.execFile('docker', ['kill', this.containerName]);
+                        this.showErrorBanner('The program exceeded its CPU quota.');
+                    }
+                },
+            );
         }, 1000);
     };
 
